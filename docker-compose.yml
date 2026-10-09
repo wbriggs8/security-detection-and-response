@@ -1,0 +1,33 @@
+services:
+  db:
+    image: mysql:8.4
+    # utilizes the 8.4 mysql container image
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      # references database name in .env file
+      MYSQL_USER: ${DB_USER}
+      # references database username in .env file
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      # references database password in .env file
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      # references database root password in .env file
+    volumes:
+      - sdr-volume:/var/lib/mysql
+      # mounts the sdr-volume to the /var/lib/mysql directory in the container for persistent storage of database data
+# database container image
+  wordpress:
+    image: wordpress:latest
+    # utilizes the latest wordpress container image
+    depends_on:
+      - db
+    ports:
+      - "8080:80"
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      # these environment variables reference the database connection details defined in the .env file
+# wordpress container image
+volumes:
+  sdr-volume:
