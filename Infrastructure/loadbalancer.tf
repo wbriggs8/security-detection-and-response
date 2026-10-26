@@ -37,6 +37,7 @@ resource "aws_lb_target_group" "load-balancer-target-group" {
     port = 443
     protocol = "HTTP"
     vpc_id = aws_vpc.vpc-us-east-1.id
+    target_type = "ip"
 }
 # ALB receives internet traffic
 # the listener listens in and decides which target group to forward the traffic to

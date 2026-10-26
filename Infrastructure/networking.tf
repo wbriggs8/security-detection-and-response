@@ -1,5 +1,7 @@
 resource "aws_vpc" "vpc-us-east-1" { 
     cidr_block = "10.0.0.0/16"
+    enable_dns_support   = true
+    enable_dns_hostnames = true
 }
 resource "aws_internet_gateway" "internet-gateway-us-east-1" {
     vpc_id = aws_vpc.vpc-us-east-1.id
@@ -20,7 +22,7 @@ resource "aws_route_table_association" "public-route-table-association2" {
     subnet_id = aws_subnet.public-subnet2.id
     route_table_id = aws_route_table.public-route-table.id
 }
-# ------------------- PUBLIC ROUTE TABLES -----------------
+# ------------------- PUBLIC ROUTE TABLES END -----------------
 resource "aws_route_table" "task-route-table" {
     vpc_id = aws_vpc.vpc-us-east-1.id
 }
@@ -28,7 +30,7 @@ resource "aws_route_table_association" "task-route-table-association1" {
     subnet_id = aws_subnet.task-subnet1.id
     route_table_id = aws_route_table.task-route-table.id
 }
-# ------------------- TASK ROUTE TABLES -----------------
+# ------------------- TASK ROUTE TABLES END -----------------
 resource "aws_route_table" "database-route-table" {
     vpc_id = aws_vpc.vpc-us-east-1.id
 }
@@ -40,7 +42,7 @@ resource "aws_route_table_association" "database-route-table-association2" {
     subnet_id = aws_subnet.database-subnet2.id
     route_table_id = aws_route_table.database-route-table.id
 }
-# ------------------- DATABASE ROUTE TABLES -----------------
+# ------------------- DATABASE ROUTE TABLES END -----------------
 resource "aws_security_group" "public-tier-securitygroup" {
     name = "public-tier-securitygroup"
     description = "HTTP/HTTPS inbound traffic"
@@ -98,6 +100,20 @@ resource "aws_security_group_rule" "task-securitygroup-rule-egress" {
     security_group_id = aws_security_group.task-securitygroup.id 
 }
 # ------------------- TASK TIER SECURITY GROUP END -----------------
+resource "aws_security_group" "endpoint-securitygroup" {
+    name = "endpoint-securitygroup"
+    description = "For the endpoint, allow inbound traffic from the task security group"
+    vpc_id = aws_vpc.vpc-us-east-1.id
+}
+resource "aws_security_group_rule" "endpoint-securitygroup-rule" {
+    type = "ingress"
+    from_port = 443
+    to_port = 443
+    protocol = "tcp"
+    source_security_group_id = aws_security_group.task-securitygroup.id
+    security_group_id = aws_security_group.endpoint-securitygroup.id
+}
+# ----------------- ENDPOINT SECURITY GROUPS END -----------------
 resource "aws_security_group" "database-tier-securitygroup" {
     name = "database-tier-securitygroup"
     description = "For the database, allow inbound traffic from the task security group"
