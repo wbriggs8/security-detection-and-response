@@ -9,7 +9,20 @@ This project is built of a modified version of my HA scalable project, from a EC
 
 ## Architecture
 
+![alt text](baseinfra.png)
+![alt text](remediationprocess.png)
 
+Several design decisions were made such as:
+| Decision | Choice | Why |
+| :--- | :--- | :--- |
+| **Image source** | Mirror a pinned official WordPress image into ECR | A task in a private subnet cannot reach Docker Hub, and ECR gives a scan point and a frozen copy. |
+| **Task network** | Private subnet, no NAT, VPC endpoints | No outbound internet path limits what a compromised task can do. |
+| **Telemetry & endpoints** | GuardDuty ECS Runtime Monitoring via VPC endpoints | Allows the GuardDuty security agent to send runtime telemetry from an isolated private subnet without internet access. |
+| **TLS** | HTTPS with a domain and an ACM certificate, terminated at the ALB; port 80 redirects to 443 | The task receives plain HTTP on port 80 inside the VPC. This is what is deployed. |
+| **Database** | RDS MySQL, single-AZ, private subnets | Managed, durable, and separate from the container lifecycle. |
+| **Compute** | ECS Fargate, `awsvpc` networking, target group type `ip` | No hosts to patch, one network interface and security group per task, and the service replaces failed tasks. |
+| **Task count** | 3 desired tasks, all in the single task-subnet AZ | Stopping one compromised task leaves the others serving while the service replaces it. |
+| **Health check** | Target group accepts HTTP 200–399 | WordPress answers with a redirect (`302`), so a 200-only check marked healthy tasks as failed. |
 
 # STILL WORKING ON IT
 
