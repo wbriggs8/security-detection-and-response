@@ -9,20 +9,178 @@ This project is built of a modified version of my HA scalable project, from a EC
 
 ## Architecture
 
-![alt text](baseinfra.png)
-![alt text](remediationprocess.png)
+![alt text](docs/images/baseinfra.png)
+![alt text](docs/images/remediationprocess.png)
 
-Several design decisions were made such as:
+## Design Decisions
 | Decision | Choice | Why |
 | :--- | :--- | :--- |
 | **Image source** | Mirror a pinned official WordPress image into ECR | A task in a private subnet cannot reach Docker Hub, and ECR gives a scan point and a frozen copy. |
 | **Task network** | Private subnet, no NAT, VPC endpoints | No outbound internet path limits what a compromised task can do. |
 | **Telemetry & endpoints** | GuardDuty ECS Runtime Monitoring via VPC endpoints | Allows the GuardDuty security agent to send runtime telemetry from an isolated private subnet without internet access. |
 | **TLS** | HTTPS with a domain and an ACM certificate, terminated at the ALB; port 80 redirects to 443 | The task receives plain HTTP on port 80 inside the VPC. This is what is deployed. |
-| **Database** | RDS MySQL, single-AZ, private subnets | Managed, durable, and separate from the container lifecycle. |
-| **Compute** | ECS Fargate, `awsvpc` networking, target group type `ip` | No hosts to patch, one network interface and security group per task, and the service replaces failed tasks. |
+| **Database** | RDS MySQL, single-AZ, private subnets | Cost optimization, kept project focused on detection and remediation rather than extreme high availability. |
+| **Compute** | ECS Fargate, `awsvpc` networking, target group type `ip` | No hosts to patch, only one singular network interface and security group per task, and the service replaces failed tasks. No hardcoding addresses. |
 | **Task count** | 3 desired tasks, all in the single task-subnet AZ | Stopping one compromised task leaves the others serving while the service replaces it. |
 | **Health check** | Target group accepts HTTP 200–399 | WordPress answers with a redirect (`302`), so a 200-only check marked healthy tasks as failed. |
+| **Scanning** | ECR basic scanning on push | All I needed for a short-lived environment. |
+| **Detection** | GuardDuty with ECS Fargate runtime monitoring and RDS login events | Runtime monitoring sees behavior inside the container, such as DNS lookups of known command-and-control domains. The RDS data-risk feature was left off because its learning period does not fit a quick build-and-destroy workflow. |
+| **Response** | Lambda stops the affected task when severity is 5.0 or higher | Response by replacement: the image is immutable and the task holds no state, so a fresh task from the trusted image replaces it instantly. Tested remediation to 5.3 seconds total. |
+
+## Network and access control
+
+### Subnets (`us-east-1`)
+
+| Tier | Subnets | AZs | Route to internet |
+| :--- | :--- | :--- | :--- |
+| **Public** | 2 | `1a`, `1b` | Yes (ALB only) |
+| **Task** | 1 | `1a` | No |
+| **Database** | 2 (subnet group requirement) | `1a`, `1b` | No |
+
+ALBs require two subents. RDS requires the subnet group to be attached to two subnets as well, but the instance itself runs in one AZ. The task subnet, endpoints, and database instance share an AZ to avoid cross-AZ traffic.
+
+### Security group chain
+
+Each group allows only what its own resource receives, and every source except the ALB's is another security group.
+
+| Group | Attached to | Inbound |
+| :--- | :--- | :--- |
+| `alb-sg` | ALB | `80` and `443` from the internet |
+| `task-sg` | Fargate tasks | `80` from `alb-sg` |
+| `rds-sg` | Database | `3306` from `task-sg` |
+| `endpoint-sg` | Interface endpoints | `443` from `task-sg` |
+
+### VPC endpoints
+
+Each endpoint is there because something specific calls it. If I cannot name the call, the endpoint is not created.
+
+| Endpoint | Type | What needs it |
+| :--- | :--- | :--- |
+| `ecr.api` | Interface | The platform authenticates to ECR |
+| `ecr.dkr` | Interface | The platform requests the image manifest |
+| `s3` | Gateway | ECR stores image layers in S3 |
+| `logs` | Interface | The container's logs go to CloudWatch |
+| `secretsmanager` | Interface | Database credentials are injected at task startup |
+| `guardduty-data` *(VPC endpoint)* | Interface | GuardDuty ECS Runtime Monitoring agent sends telemetry to GuardDuty |
+
+**Left out on purpose:** `ecs`, `ecs-agent`, and `ecs-telemetry` (the Fargate platform handles that side, only required in ECS EC2) and `monitoring` (nothing inside the task publishes metrics).
+
+**Troubleshooting Verification Process** The tasks start in the private subnet, which has no NAT and no public IP, so the image pulls (including the GuardDuty agent's image) and secret injection went through these endpoints. When the agent's image pull failed with a `403`, I checked the endpoint availability, private DNS, the S3 route table association, and the endpoint policies before concluding it was an IAM problem, not a network one. Gave ECS IAM role permissions to pull GuardDuty Agent image.
+
+## IAM roles
+
+| Role | Used by | What it can do |
+| :--- | :--- | :--- |
+| **Task execution role** | The ECS platform, on my behalf | Pull from my repository and from the GuardDuty agent's AWS-managed repository, write to this one log group, read this one secret *(and decrypt it with the customer-managed KMS key)* |
+| **Task role** | The application code in the container | Nothing to really configure honestly. WordPress makes no AWS calls |
+| **Lambda execution role** | The response function | Stop tasks (scoped to tasks in this cluster for least privellege) and write its own logs |
+
+Both ECS roles trust `ecs-tasks.amazonaws.com`. The execution role's credentials are used by the platform and are not exposed to the container. The task role is available to the container, so it is deliberately empty: a compromised WordPress finds nothing to steal. The only statement that cannot be scoped to a resource is `ecr:GetAuthorizationToken`. `kms:Decrypt` is scoped to the specific KMS key encrypting the database secret.
+
+## Image supply chain
+
+### Current image
+
+| Item | Value |
+| :--- | :--- |
+| **Upstream image** | `wordpress:7.1.3-php8.3-apache` *(rebuilt upstream with PHP 8.3.36)* |
+| **Upstream digest (index)** | `sha256:d42f63cb89ad0eab272c4b393164e63830d0df270009907919f7dcce52b1a20b` |
+| **ECR tag** | `7.1.3-php8.3.36-apache` *(my own tag)* |
+| **ECR digest (single platform)** | `sha256:806680ba62232c4c300fb9dcc9f89d08e9e8c2bfc59837a1f58716f8648306d5` |
+| **Mirrored** | `2026-10-22` |
+| **ECR tag mutability** | `Immutable` |
+| **Repository encryption** | `KMS (customer-managed key)` |
+| **Platform** | `linux/amd64`, confirmed, matching the Fargate default |
+
+**Why two digests.** The upstream tag points to a multi-platform index. My machine downloaded only the build for its own platform and pushed that single manifest, so the digest changed even though no layers were modified.
+
+**Immutable decision.** I chose to make the image tag immutable due to the fact that it prevents container image tags from being overwritten, deleted, or altered once they are pushed to a registry. I also didn't want any malicious code or scripts from altering the code at runtime. It wipes out any persistent malware when the task is restarted which further supports the task shutdown and restart objective of this project.
+
+## Case study: the PHP2Shell patch
+
+### Timeline
+
+| Date | Event | Details |
+| :--- | :--- | :--- |
+| **2026-10-21 (evening)** | Initial mirror | Mirrored `7.1.3-php8.3-apache` into ECR running **PHP 8.3.35**. |
+| **2026-10-21** | Upstream advisory | PHP released fixes for two critical remote code execution flaws (`CVE-2026-109618` and `CVE-2026-109619`) in new releases including **8.3.36**. *(Sources: watchTowr FAQ and The Hacker News)* |
+| **2026-10-22** | Patched re-pull & deploy | Re-pulled the same upstream tag and confirmed it pointed to a rebuilt image (**PHP 8.3.36**, built `2026-10-21`)—a live example of a mutable upstream tag. Because the old ECR tag is immutable, the patched image was pushed under a new tag (`7.1.3-php8.3.36-apache`) and the task definition was updated to match. |
+| **Post-deploy** | Cleanup & retention | Verified the PHP version via the exact image name before pushing. Deleted the old `7.1.3-php8.3-apache` tag (`PHP 8.3.35`) from ECR so it cannot be deployed by accident. Its digest and scan counts are recorded here, though its findings can no longer be viewed. |
+
+> **Takeaway:** The image had been frozen for less than a day before a critical flaw landed, illustrating the operational cost of an immutable mirror and the argument for continuous scanning *(see Future work)*.
+
+### Scan results
+
+ECR basic scan on push:
+
+| Image | Scan date | Critical | High | Medium | Low | Info | Total |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| `7.1.3-php8.3-apache` *(PHP 8.3.35)* | `2026-10-21` | 13 | 106 | 71 | 16 | 0 | **206** *(table showed 704 rows)* |
+| `7.1.3-php8.3.36-apache` *(PHP 8.3.36)* | `2026-10-22` | 2 | 17 | 66 | 14 | 0 | **99** *(table showed 99 rows)* |
+
+## Detection and response
+### How it works
+1. Detection. 
+GuardDuty ECS Fargate runtime monitoring runs an agent as a sidecar container in every task, so it sees behavior inside the running container (DNS lookups, processes, network connections). RDS login events are also monitored.
+2. Routing. 
+An EventBridge rule matches GuardDuty findings whose resource is an ECS cluster and passes them to a Lambda function. The function checks the severity.
+3. Response. 
+For severity 5.0 or higher, the Lambda extracts the affected task from the finding and calls ecs:StopTask with a reason that names the finding type. The ECS service sees the task count drop and starts a replacement from the trusted image.
+4. Response by replacement. 
+Because the image is immutable and the task holds no state, replacing the task removes whatever the attacker planted. The other tasks keep serving traffic meanwhile.
+
+## Test
+
+I did not generate suspicious behavior against the WordPress service. Instead, I launched an isolated, disposable Fargate task with the GuardDuty agent running beside a test container, and used the domain AWS designates for GuardDuty command-and-control testing to produce DNS activity safely.
+
+### Execution & Results
+
+| Step | Result |
+| :--- | :--- |
+| **GuardDuty finding** | High severity `Backdoor:Runtime/C&CActivity.B!DNS` |
+| **EventBridge** | Matched the ECS finding (severity `5` or higher) and invoked the Lambda |
+| **Lambda** | Extracted the real affected task ARN from the finding and called `ecs:StopTask` |
+| **ECS** | The task entered `STOPPED` with the reason `Automated remediation: Backdoor:Runtime/C&CActivity.B!DNS detected.` |
+| **Timing** | About **5.3 seconds** from the finding's creation to the task's termination |
+
+> **Timing note:** The timing starts when GuardDuty creates the finding. It does not include the time between the activity itself and the finding being created, so it measures the response and not the whole detection.
+
+### Evidence
+
+| Artifact | Path | What it shows |
+| :--- | :--- | :--- |
+| **Running task** | ![alt text](docs/images/running_containers_agent.png) | Both containers running in the task *(WordPress/test container + GuardDuty security agent)* |
+| **Target group health** | ![alt text](docs/images/target_health.png) | Target group healthy | Draining targets are targets that are being deregistered for new ones
+| **GuardDuty finding** | ![alt text](docs/images/guardduty_finding.png) | GuardDuty finding (`Backdoor:Runtime/C&CActivity.B!DNS`) |
+| **Lambda log** | ![alt text](docs/images/lambda_logs.png) | Lambda execution log extracting the `taskArn` and calling `ecs:StopTask` |
+| **Stopped task** | ![alt text](docs/images/stopped_task.png) | Task stopped with the automated remediation reason | 
+
+## Secrets and encryption
+
+### Secret supply by environment
+
+| Where | How secrets are supplied |
+| :--- | :--- |
+| **Local** | `.env` file *(git-ignored)*, read by Docker Compose |
+| **AWS** | Secrets Manager, injected by the ECS execution role |
+
+### ECS task definition configuration
+
+In the task definition, non-secret settings and credentials share the exact same `WORDPRESS_DB_*` variable names used locally so the container image remains identical across both environments:
+
+| Setting | Task definition block | Source |
+| :--- | :--- | :--- |
+| `WORDPRESS_DB_HOST` | `environment` | RDS endpoint address |
+| `WORDPRESS_DB_NAME` | `environment` | RDS database name resource reference |
+| `WORDPRESS_DB_USER` | `environment` | RDS database username resource reference |
+| `WORDPRESS_DB_PASSWORD` | `secrets` | Secrets Manager secret ARN reference *(fetched and injected at startup)* |
+
+### Encryption & hygiene
+
+* **Value isolation:** The local and AWS credential sets are completely separate and never need to match.
+* **Repository hygiene:** No credentials, Terraform state files, or `.tfvars` files are committed to version control.
+* **KMS encryption:** Both the ECR repository and the Secrets Manager secret are encrypted with a **customer-managed KMS key**, trading off a small monthly key fee and a mandatory deletion waiting period when the environment is destroyed.
+
 
 # STILL WORKING ON IT
 
