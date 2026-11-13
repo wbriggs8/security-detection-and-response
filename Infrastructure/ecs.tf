@@ -90,15 +90,6 @@ resource "aws_ecs_cluster" "wordpress-cluster" {
   }
 }
 # the environment that the container actually lives 
-resource "aws_cloudwatch_log_group" "wordpress-log-group" {
-  name              = "wordpress-log-group"
-  retention_in_days = 7
-}
-resource "aws_cloudwatch_log_group" "lambda-log-group" {
-  name              = "/aws/lambda/${aws_lambda_function.ecs-lambda-function.function_name}"
-  retention_in_days = 7
-}
-# log group that the wordpress containers pushes log streams to for monitoring and debugging purposes, with a retention of 7 days
 # task definition for the wordpress container to be run on ECS Fargate
 # establishes cpu and memory and references the image from the ECR repository
 # references the exact image needed (pulled using docker command docker pull wordpress:7.1.3-php8.2-apache)
@@ -119,15 +110,15 @@ resource "aws_ecs_task_definition" "guardduty-test" {
       essential = true
 
       # Keep the disposable container alive for testing
-      
+
       entryPoint = [
         "/bin/sh",
         "-c"
-        ]
+      ]
 
       command = [
         "sleep 60; getent hosts guarddutyc2activityb.com; sleep 3600"
-        ]
+      ]
     }
   ])
 }

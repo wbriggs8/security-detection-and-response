@@ -156,3 +156,37 @@ resource "aws_iam_role_policy" "lambda_ecs_policy" {
     ]
   })
 }
+# ---------------------------------------- WAF LOGGING POLICY
+resource "aws_cloudwatch_log_resource_policy" "waf-logging-role-policy" {
+  policy_name = "waf-logging-role-policy"
+  policy_document = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "waf.amazonaws.com"
+      }
+      Action = [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ]
+      Resource = "${aws_cloudwatch_log_group.aws-waf-log-group.arn}:*"
+    }]
+  })
+}
+# creates policy that allows AWS WAF to push logs to CloudWatch logs for monitoring and debugging purposes
+# ----------------------------------------- SNS TOPIC POLICY
+resource "aws_sns_topic_policy" "guardduty-sns-topic-policy" {
+  arn = aws_sns_topic.guardduty-sns-topic.arn
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "events.amazonaws.com"
+      }
+      Action   = "sns:Publish"
+      Resource = aws_sns_topic.guardduty-sns-topic.arn
+    }]
+  })
+}

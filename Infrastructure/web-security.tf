@@ -73,8 +73,8 @@ resource "aws_wafv2_web_acl" "wordpress-waf" {
             # provides the path to the wordpress application
             search_string = "/wp-login.php"
             # login page for the wordpress application, searches for this page to connect to the rate limit configuration
-            positional_constraint = "EXACTLY"
-            # makes sure it hits the login page exactly, didnt choose "STARTS_WITH" because I wanted it to hit the login page exactly as shown in the search_string
+            positional_constraint = "STARTS_WITH"
+
             text_transformation {
               priority = 1
               type     = "URL_DECODE"
@@ -117,4 +117,11 @@ resource "aws_wafv2_web_acl" "wordpress-waf" {
   # utilizes AWS common rulesets for basic firewall measures against attacks like SQL injections XSS, etc.
 }
 # creates rate limit rule
+resource "aws_wafv2_web_acl_logging_configuration" "waf-logging" {
+  resource_arn            = aws_wafv2_web_acl.wordpress-waf.arn
+  log_destination_configs = [aws_cloudwatch_log_group.aws-waf-log-group.arn]
+  # sends the WAF logs to the cloudwatch log group for monitoring and debugging purposes
+  depends_on = [aws_cloudwatch_log_resource_policy.waf-logging-role-policy]
+}
+
 

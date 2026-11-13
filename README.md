@@ -9,7 +9,7 @@ This project is built of a modified version of my HA scalable project, from a EC
 
 ## Architecture
 
-![alt text](docs/images/baseinfra.png)
+![alt text](<docs/images/Base Infrastructure.png>)
 ![alt text](docs/images/remediationprocess.png)
 
 ## Design Decisions
@@ -118,6 +118,22 @@ ECR basic scan on push:
 | `7.1.3-php8.3-apache` *(PHP 8.3.35)* | `2026-10-21` | 13 | 106 | 71 | 16 | 0 | **206** *(table showed 704 rows)* |
 | `7.1.3-php8.3.36-apache` *(PHP 8.3.36)* | `2026-10-22` | 2 | 17 | 66 | 14 | 0 | **99** *(table showed 99 rows)* |
 
+## Web application firewall
+
+A regional WAF web ACL is associated with the ALB. The default action is **allow**, because the site is public. Rules are evaluated in priority order:
+
+| Priority | Rule | What it does |
+| :---: | :--- | :--- |
+| `1` | **AWS managed common rule set** | Blocks common web attacks such as SQL injection and cross-site scripting |
+| `2` | **Login rate limit** | Blocks an IP that makes more than `20` requests to `/wp-login.php` within the rate-limit window |
+| `3` | **General rate limit** | Blocks an IP that makes more than `2000` requests within the window |
+
+* **Inbound IP blocking:** Rate-based rules count requests per IP over an evaluation window *(five minutes by default)* and block the IP automatically while it stays over the limit. That is the inbound IP-blocking layer. WAF is also configured to push logs to CloudWatch Logs for further analysis.
+* **Separation of controls:** GuardDuty does not read from the WAF. Runtime findings describe what a task did *(such as a DNS lookup of a command-and-control domain)*, not a visitor's IP, so the two controls cover different directions: **WAF** handles inbound attacks, and GuardDuty handles runtime monitoring with the Lambda and handles a compromised workload.
+
+
+
+
 ## Detection and response
 ### How it works
 1. Detection. 
@@ -125,7 +141,7 @@ GuardDuty ECS Fargate runtime monitoring runs an agent as a sidecar container in
 2. Routing. 
 An EventBridge rule matches GuardDuty findings whose resource is an ECS cluster and passes them to a Lambda function. The function checks the severity.
 3. Response. 
-For severity 5.0 or higher, the Lambda extracts the affected task from the finding and calls ecs:StopTask with a reason that names the finding type. The ECS service sees the task count drop and starts a replacement from the trusted image.
+For severity 5.0 or higher, the Lambda extracts the affected task from the finding and calls ecs:StopTask with a reason that names the finding type. The ECS service sees the task count drop and starts a replacement from the trusted image. GuardDuty pushes alert to email through SNS aswell.
 4. Response by replacement. 
 Because the image is immutable and the task holds no state, replacing the task removes whatever the attacker planted. The other tasks keep serving traffic meanwhile.
 
@@ -181,6 +197,38 @@ In the task definition, non-secret settings and credentials share the exact same
 * **Repository hygiene:** No credentials, Terraform state files, or `.tfvars` files are committed to version control.
 * **KMS encryption:** Both the ECR repository and the Secrets Manager secret are encrypted with a **customer-managed KMS key**, trading off a small monthly key fee and a mandatory deletion waiting period when the environment is destroyed.
 
+## Troubleshooting notes
+
+Things that broke while building this, and why:
+
+| Symptom | Cause | Fix |
+| :--- | :--- | :--- |
+| `docker login` to ECR returns `400 Bad Request` | PowerShell alters the piped token | Run the login through `cmd /c` |
+| `InvalidClientTokenId` on a profile with an active key | Two IAM users with the same name in different accounts shared one profile name | Name profiles by account, and verify each with `aws sts get-caller-identity` |
+| `Too many command line arguments` with `-target` | PowerShell splits the address at the dot | Quote the whole flag |
+| Task can't start, can't assume role | Trust policy named `ecs.amazonaws.com` | Use `ecs-tasks.amazonaws.com` |
+| Service creation fails: target group type `instance` is incompatible with `awsvpc` | Target group defaulted to instance targets | Set `target_type = "ip"` |
+| Service places no tasks | Fargate-only task definition needs the service to launch on Fargate | Set `launch_type = "FARGATE"` |
+| Log writes denied | The log group ARN doesn't cover the streams inside it | Append `:*` to the resource |
+| GuardDuty agent container stays `STOPPED` with `CannotPullContainerError: 403 Forbidden` | The agent runs from an AWS-managed ECR repository, and the execution role could only pull from my own repository | Add that repository to the role's ECR pull permissions, scoped to it. *(The endpoints, private DNS, route table, and endpoint policies were all fine, so it was IAM and not routing.)* |
+| New tasks fail health checks and are replaced in a loop | WordPress answers with a `302` redirect and the target group accepted only `200` | Set the matcher to `200-399` |
+| Runtime monitoring enabled but existing tasks have no agent | The agent is added when a task is launched | Force a new deployment so the tasks are replaced |
+
+## Future work
+Outbound controls for a compromised task, such as Route 53 Resolver DNS Firewall or security group egress rules, since runtime findings describe what the task connected to
+Preserve evidence before stopping a task, for example by capturing the full finding and task details to durable storage
+Continuous scanning with Amazon Inspector, with findings routed into the same EventBridge pipeline, PHP2Shell patch made me realized how quickly immutable images can age and suddenly become highly vulnerable
+Forward findings and logs to a SIEM such as Splunk 
+CI/CD pipeline for build, scan, push, and deploy using a short-lived role, with a unique immutable tag per build
+A hardened image phase: triage the scan, build an updated image, rescan, and compare
+RDS Multi-AZ
+IAM Identity Center and AWS Organizations for multi-account access without long-term keys
+A compliance mapping of the controls here to HIPAA and PCI-DSS control areas
+
+## Security notes
+Secrets, state files, and .tfvars are git-ignored. Account IDs are replaced with <account-id> in this document.
+The task has no outbound internet path, and each security group allows only the tier above it.
+A WAF in front of the ALB rate-limits abusive IPs and applies managed rules.
 
 # STILL WORKING ON IT
 
