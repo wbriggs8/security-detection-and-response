@@ -215,15 +215,14 @@ Things that broke while building this, and why:
 | Runtime monitoring enabled but existing tasks have no agent | The agent is added when a task is launched | Force a new deployment so the tasks are replaced |
 
 ## Future work
-Outbound controls for a compromised task, such as Route 53 Resolver DNS Firewall or security group egress rules, since runtime findings describe what the task connected to
-Preserve evidence before stopping a task, for example by capturing the full finding and task details to durable storage
-Continuous scanning with Amazon Inspector, with findings routed into the same EventBridge pipeline, PHP2Shell patch made me realized how quickly immutable images can age and suddenly become highly vulnerable
-Forward findings and logs to a SIEM such as Splunk 
-CI/CD pipeline for build, scan, push, and deploy using a short-lived role, with a unique immutable tag per build
-A hardened image phase: triage the scan, build an updated image, rescan, and compare
-RDS Multi-AZ
-IAM Identity Center and AWS Organizations for multi-account access without long-term keys
-A compliance mapping of the controls here to HIPAA and PCI-DSS control areas
+1. Outbound controls for a compromised task, such as Route 53 Resolver DNS Firewall or security group egress rules, since runtime findings describe what the task connected to
+2. Preserve evidence before stopping a task, for example by capturing the full finding and task details to durable storage
+3. Continuous scanning with Amazon Inspector, with findings routed into the same EventBridge pipeline, PHP2Shell patch made me realized how quickly immutable images can age and suddenly become highly vulnerable
+4. Forward findings and logs to a SIEM such as Splunk 
+5. CI/CD pipeline for build, scan, push, and deploy using a short-lived role, with a unique immutable tag per build
+6. A hardened image phase: triage the scan, build an updated image, rescan, and compare
+7. IAM Identity Center and AWS Organizations for multi-account access without long-term keys
+8. A compliance mapping of the controls here to HIPAA and PCI-DSS control areas
 
 ## Security notes
 Secrets, state files, and .tfvars are git-ignored. Account IDs are replaced with <account-id> in this document.
