@@ -229,8 +229,6 @@ Secrets, state files, and .tfvars are git-ignored. Account IDs are replaced with
 The task has no outbound internet path, and each security group allows only the tier above it.
 A WAF in front of the ALB rate-limits abusive IPs and applies managed rules.
 
-# STILL WORKING ON IT
-
  
 
 
