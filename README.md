@@ -61,7 +61,6 @@ Each endpoint is there because something specific calls it. If I cannot name the
 | `s3` | Gateway | ECR stores image layers in S3 |
 | `logs` | Interface | The container's logs go to CloudWatch |
 | `secretsmanager` | Interface | Database credentials are injected at task startup |
-| `guardduty-data` *(VPC endpoint)* | Interface | GuardDuty ECS Runtime Monitoring agent sends telemetry to GuardDuty |
 
 **Left out on purpose:** `ecs`, `ecs-agent`, and `ecs-telemetry` (the Fargate platform handles that side, only required in ECS EC2) and `monitoring` (nothing inside the task publishes metrics).
 
